@@ -5,10 +5,45 @@ import rehypeKatex from "rehype-katex";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus, vs } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useTheme } from "./theme-provider";
-import LZString from "lz-string";
 import { Share2 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
 import "katex/dist/katex.min.css";
+
+const toBase64 = (buffer: ArrayBuffer) => {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+};
+
+const fromBase64 = (base64: string) => {
+  const binary = atob(base64.replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+};
+
+async function compress(text: string): Promise<string> {
+  const stream = new Blob([text]).stream();
+  const compressed = stream.pipeThrough(new (window as any).CompressionStream("gzip"));
+  const response = await new Response(compressed);
+  const buffer = await response.arrayBuffer();
+  return toBase64(buffer);
+}
+
+async function decompress(base64: string): Promise<string> {
+  const bytes = fromBase64(base64);
+  const stream = new Blob([bytes]).stream();
+  const decompressed = stream.pipeThrough(new (window as any).DecompressionStream("gzip"));
+  const response = await new Response(decompressed);
+  return await response.text();
+}
 
 const DEFAULT_MARKDOWN = `# Markdown Editor
 
@@ -89,36 +124,59 @@ const MarkdownEditor: React.FC = () => {
 
   // Load from URL on mount
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const compressed = params.get("c");
-    if (compressed) {
-      try {
-        const decompressed = LZString.decompressFromEncodedURIComponent(compressed);
-        if (decompressed) {
-          setMarkdown(decompressed);
+    const loadFromUrl = async () => {
+      // First try Hash (new method)
+      const hash = window.location.hash.substring(1);
+      if (hash) {
+        try {
+          const decompressed = await decompress(hash);
+          if (decompressed) {
+            setMarkdown(decompressed);
+            return;
+          }
+        } catch (e) {
+          console.error("Failed to decompress content from URL hash", e);
         }
-      } catch (e) {
-        console.error("Failed to decompress content from URL", e);
       }
-    }
+
+      // Fallback to query param (could be from old version or manually added)
+      // Note: old LZString data won't work without lz-string library
+      const params = new URLSearchParams(window.location.search);
+      const compressed = params.get("c");
+      if (compressed) {
+        try {
+          const decompressed = await decompress(compressed);
+          if (decompressed) {
+            setMarkdown(decompressed);
+          }
+        } catch (e) {
+          console.error("Failed to decompress content from URL parameter", e);
+        }
+      }
+    };
+
+    loadFromUrl();
   }, []);
 
-  const handleShare = useCallback(() => {
-    const compressed = LZString.compressToEncodedURIComponent(markdown);
-    const url = new URL(window.location.href);
-    url.searchParams.set("c", compressed);
-    url.searchParams.set("view", "render");
-    const shareUrl = url.toString();
+  const handleShare = useCallback(async () => {
+    try {
+      const compressed = await compress(markdown);
+      const url = new URL(window.location.origin + window.location.pathname);
+      url.searchParams.set("view", "render");
+      const shareUrl = url.toString() + "#" + compressed;
 
-    if (navigator.share) {
-      navigator.share({
-        title: "Markdown Share",
-        text: "Check out this rendered markdown",
-        url: shareUrl,
-      }).catch(console.error);
-    } else {
-      navigator.clipboard.writeText(shareUrl);
-      alert("Rendered view URL copied to clipboard!");
+      if (navigator.share) {
+        navigator.share({
+          title: "Markdown Share",
+          text: "Check out this rendered markdown",
+          url: shareUrl,
+        }).catch(console.error);
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+        alert("Rendered view URL copied to clipboard!");
+      }
+    } catch (e) {
+      console.error("Failed to compress and share content", e);
     }
   }, [markdown]);
 
@@ -179,9 +237,7 @@ const MarkdownEditor: React.FC = () => {
 
   if (isRenderOnly) {
     return (
-      <motion.div 
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
+      <div 
         className="min-h-screen bg-background text-foreground transition-colors duration-500"
       >
         <div className="max-w-4xl mx-auto px-6 py-12 md:py-20">
@@ -191,7 +247,7 @@ const MarkdownEditor: React.FC = () => {
             {RenderedMarkdown}
           </article>
         </div>
-      </motion.div>
+      </div>
     );
   }
 
@@ -205,7 +261,7 @@ const MarkdownEditor: React.FC = () => {
         >
           <span className={`relative z-10 transition-opacity duration-300 ${activeTab === "editor" ? "opacity-100" : "opacity-40"}`}>Editor</span>
           {activeTab === "editor" && (
-            <motion.div layoutId="activeTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
           )}
         </button>
         <button
@@ -214,7 +270,7 @@ const MarkdownEditor: React.FC = () => {
         >
           <span className={`relative z-10 transition-opacity duration-300 ${activeTab === "preview" ? "opacity-100" : "opacity-40"}`}>Preview</span>
           {activeTab === "preview" && (
-            <motion.div layoutId="activeTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
           )}
         </button>
       </div>
@@ -222,88 +278,70 @@ const MarkdownEditor: React.FC = () => {
       {/* Main Content */}
       <main className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
         {/* Editor */}
-        <AnimatePresence mode="wait">
-          {(activeTab === "editor" || window.innerWidth >= 768) && (
-            <motion.div 
-              key="editor"
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className={`flex-1 flex flex-col md:border-r border-border/20 ${activeTab !== "editor" ? "hidden md:flex" : "flex"}`}
-            >
-              <div className="hidden md:block px-6 py-3 text-[9px] font-black uppercase tracking-[0.3em] opacity-20 bg-secondary/5 border-b border-border/20">Editor</div>
-              <textarea
-                ref={editorRef}
-                onScroll={handleScroll}
-                className="flex-1 p-6 md:p-10 bg-transparent outline-none resize-none font-mono text-sm leading-relaxed placeholder:opacity-10 scrollbar-hide selection:bg-primary/20"
-                value={markdown}
-                onChange={(e) => setMarkdown(e.target.value)}
-                placeholder="Start typing..."
-                spellCheck={false}
-              />
-            </motion.div>
-          )}
+        {(activeTab === "editor" || window.innerWidth >= 768) && (
+          <div 
+            className={`flex-1 flex flex-col md:border-r border-border/20 ${activeTab !== "editor" ? "hidden md:flex" : "flex"}`}
+          >
+            <div className="hidden md:block px-6 py-3 text-[9px] font-black uppercase tracking-[0.3em] opacity-20 bg-secondary/5 border-b border-border/20">Editor</div>
+            <textarea
+              ref={editorRef}
+              onScroll={handleScroll}
+              className="flex-1 p-6 md:p-10 bg-transparent outline-none resize-none font-mono text-sm leading-relaxed placeholder:opacity-10 scrollbar-hide selection:bg-primary/20"
+              value={markdown}
+              onChange={(e) => setMarkdown(e.target.value)}
+              placeholder="Start typing..."
+              spellCheck={false}
+            />
+          </div>
+        )}
 
-          {/* Preview */}
-          {(activeTab === "preview" || window.innerWidth >= 768) && (
-            <motion.div 
-              key="preview"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 20 }}
-              className={`flex-1 flex flex-col bg-secondary/[0.01] ${activeTab !== "preview" ? "hidden md:flex" : "flex"}`}
+        {/* Preview */}
+        {(activeTab === "preview" || window.innerWidth >= 768) && (
+          <div 
+            className={`flex-1 flex flex-col bg-secondary/[0.01] ${activeTab !== "preview" ? "hidden md:flex" : "flex"}`}
+          >
+            <div className="hidden md:block px-6 py-3 text-[9px] font-black uppercase tracking-[0.3em] opacity-20 bg-secondary/5 border-b border-border/20">Preview</div>
+            <div 
+              ref={previewRef}
+              onScroll={handleScroll}
+              className="flex-1 overflow-auto p-6 md:p-12 scroll-smooth selection:bg-primary/20"
             >
-              <div className="hidden md:block px-6 py-3 text-[9px] font-black uppercase tracking-[0.3em] opacity-20 bg-secondary/5 border-b border-border/20">Preview</div>
-              <div 
-                ref={previewRef}
-                onScroll={handleScroll}
-                className="flex-1 overflow-auto p-6 md:p-12 scroll-smooth selection:bg-primary/20"
-              >
-                <article className="prose prose-slate dark:prose-invert max-w-none 
-                  prose-headings:font-raleway prose-headings:font-bold
-                  prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent">
-                  {RenderedMarkdown}
-                </article>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+              <article className="prose prose-slate dark:prose-invert max-w-none 
+                prose-headings:font-raleway prose-headings:font-bold
+                prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent">
+                {RenderedMarkdown}
+              </article>
+            </div>
+          </div>
+        )}
 
         {/* Sticky Footer Buttons - Enhanced Glassmorphism */}
-        <motion.div 
-          initial={{ y: 50, opacity: 0, x: "-50%" }}
-          animate={{ y: 0, opacity: 1, x: "-50%" }}
-          className="absolute bottom-10 left-1/2 flex items-center gap-1.5 p-1.5 bg-white/5 dark:bg-black/5 backdrop-blur-3xl rounded-full border border-white/20 dark:border-white/5 shadow-[0_8px_40px_rgba(0,0,0,0.08)] z-50 transition-all hover:shadow-[0_8px_48px_rgba(0,0,0,0.12)]"
+        <div 
+          className="absolute bottom-10 left-1/2 flex items-center gap-1.5 p-1.5 bg-white/5 dark:bg-black/5 backdrop-blur-3xl rounded-full border border-white/20 dark:border-white/5 shadow-[0_8px_40px_rgba(0,0,0,0.08)] z-50 transition-all hover:shadow-[0_8px_48px_rgba(0,0,0,0.12)] -translate-x-1/2"
         >
           <label className="cursor-pointer group">
             <input type="file" accept=".md" onChange={handleImport} className="hidden" />
-            <motion.div 
-              whileHover={{ scale: 1.1 }}
-              whileTap={{ scale: 0.9 }}
-              className="w-11 h-11 hover:bg-white/10 rounded-full transition-colors flex items-center justify-center text-foreground/40 group-hover:text-foreground" title="Import"
+            <div 
+              className="w-11 h-11 hover:bg-white/10 rounded-full transition-all flex items-center justify-center text-foreground/40 group-hover:text-foreground active:scale-95 hover:scale-110" title="Import"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
-            </motion.div>
+            </div>
           </label>
-          <motion.button 
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
+          <button 
             onClick={handleExport} 
-            className="w-11 h-11 hover:bg-white/10 rounded-full transition-colors flex items-center justify-center text-foreground/40 hover:text-foreground" title="Export"
+            className="w-11 h-11 hover:bg-white/10 rounded-full transition-all flex items-center justify-center text-foreground/40 hover:text-foreground active:scale-95 hover:scale-110" title="Export"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-          </motion.button>
+          </button>
           <div className="w-px h-5 bg-foreground/5 mx-1" />
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
+          <button
             onClick={handleShare}
-            className="flex items-center gap-2 bg-primary/90 text-primary-foreground px-7 py-3 rounded-full font-bold text-[10px] uppercase tracking-wider hover:bg-primary shadow-xl shadow-primary/10 transition-all"
+            className="flex items-center gap-2 bg-primary/90 text-primary-foreground px-7 py-3 rounded-full font-bold text-[10px] uppercase tracking-wider hover:bg-primary shadow-xl shadow-primary/10 transition-all active:scale-95 hover:scale-[1.02]"
           >
             <Share2 size={13} strokeWidth={3} />
             <span>Share</span>
-          </motion.button>
-        </motion.div>
+          </button>
+        </div>
       </main>
     </div>
   );
