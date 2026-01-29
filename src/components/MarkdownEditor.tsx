@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
+import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus, vs } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -52,6 +53,14 @@ Welcome! You can write **Markdown**, include math with KaTeX:
 $$
 f(x) = \\int_{-\\infty}^\\infty \\hat{f}(\\xi) e^{2\\pi i \\xi x} d\\xi
 $$
+
+You can also use tables and inline code:
+
+| Feature | Support |
+| :--- | :--- |
+| Tables | ✅ |
+| Math | ✅ |
+| Inline Code | \`print("Hello")\` |
 
 And Python code:
 
@@ -206,10 +215,10 @@ const MarkdownEditor: React.FC = () => {
 
   const RenderedMarkdown = useMemo(() => (
     <ReactMarkdown
-      remarkPlugins={[remarkMath]}
+      remarkPlugins={[remarkMath, remarkGfm]}
       rehypePlugins={[rehypeKatex]}
       components={{
-        code({ node, inline, className, children, ...props }: any) {
+        code({ inline, className, children, ...props }: any) {
           const match = /language-(\w+)/.exec(className || "");
           return !inline && match ? (
             <div className="rounded-xl overflow-hidden my-6 border border-border/50 shadow-sm">
@@ -243,7 +252,8 @@ const MarkdownEditor: React.FC = () => {
         <div className="max-w-4xl mx-auto px-6 py-12 md:py-20">
           <article className="prose prose-slate dark:prose-invert max-w-none 
             prose-headings:font-raleway prose-headings:font-bold
-            prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent">
+            prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent
+            prose-code:before:content-none prose-code:after:content-none">
             {RenderedMarkdown}
           </article>
         </div>
@@ -308,7 +318,8 @@ const MarkdownEditor: React.FC = () => {
             >
               <article className="prose prose-slate dark:prose-invert max-w-none 
                 prose-headings:font-raleway prose-headings:font-bold
-                prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent">
+                prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent
+                prose-code:before:content-none prose-code:after:content-none">
                 {RenderedMarkdown}
               </article>
             </div>
